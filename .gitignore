@@ -1,0 +1,8 @@
+.envrc
+.direnv
+
+nimcache/
+nimblecache/
+htmldocs/
+
+oof
