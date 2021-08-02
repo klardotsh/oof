@@ -455,12 +455,12 @@ fn parse_extends<'using>(
         Ok(extends) => {
             let mut result = Vec::with_capacity(extends.len());
 
-            for e in extends.iter() {
-                let eobj = match e.get_obj() {
+            for (idx, eraw) in extends.iter().enumerate() {
+                let eobj = match eraw.get_obj() {
                     Ok(obj) => obj,
                     Err(_) => {
                         return Err(SchemaParsingError::MalformedOofInstruction {
-                            field_name: "extends[i]".to_string(),
+                            field_name: format!("extends[{}]", idx),
                             problem: COULD_NOT_BE_PARSED_AS_OBJ,
                         });
                     }
@@ -470,7 +470,7 @@ fn parse_extends<'using>(
                     Ok(val) => val,
                     Err(_) => {
                         return Err(SchemaParsingError::MalformedOofInstruction {
-                            field_name: "extends[i].repo".to_string(),
+                            field_name: format!("extends[{}].repo", idx),
                             problem: COULD_NOT_BE_PARSED_AS_STRING,
                         });
                     }
@@ -484,7 +484,7 @@ fn parse_extends<'using>(
                     Ok(path) => path,
                     Err(_) => {
                         return Err(SchemaParsingError::MalformedOofInstruction {
-                            field_name: "extends[i].path".to_string(),
+                            field_name: format!("extends[{}].path", idx),
                             problem: COULD_NOT_BE_PARSED_AS_STRING,
                         });
                     }
