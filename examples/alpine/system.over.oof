@@ -1,0 +1,565 @@
+# This file is part of the OOF project, released under the Creative Commons CC0
+# https://creativecommons.org/publicdomain/zero/1.0/
+#
+# vim: set ft=conf:
+# ^ close enough for now...
+
+# Welcome aboard! This file serves as a living example of the system@2021.08.01
+# OOF schema, wherein we'll be configuring an Alpine Linux system in a QEMU VM.
+# It also serves as a convenient place to document the behaviors, assumptions,
+# and quirks of OOF, so consider it a literate configuration exercise.
+
+# OOF configurations use the OVER (https://github.com/m-cat/over) grammar,
+# wherein top-level keys not prefaced with an @ are presumed to be instructions
+# found somewhere in the import tree. If you think of the syntax as "basically
+# JSON, but with object keys unquoted, comments, no commas in lists, and the
+# ability to include external fragments", you'll be on roughly the right track.
+
+# `oof` (required) informs the OOF parser:
+#
+# - Which grammar to use (versioned with [Chronver
+#   2019.05.19](https://chronver.org/spec/2019.05.19); in the event the core
+#   grammar changes, this allows backwards-compatibility and planned
+#   deprecations when and if necessary). This file is only an example of the
+#   system@2021.08.01 schema, see other files for other examples.
+#
+# - Various bits of metadata to ensure license compliance and provide users of
+#   an OOF configuration with contact information of the author (if available).
+oof: {
+	schema: {
+		type: "system" # required
+		version: "2021.08.01" # required
+	}
+	meta: {
+		maintainer: { # optional if homepage provided
+			name: "klardotsh" # required
+			contact: "josh@klar.sh" # optional
+		}
+		homepage: "https://code.klar.sh" # optional if maintainer provided
+
+		# Required. Follows the format specified at https://spdx.dev/ids/, for
+		# example, perhaps "GPL-3.0-or-later OR MIT". For proprietary or other
+		# non-SPDX-identifiable OOF files, "restricted" or "proprietary"
+		# (case-insensitive) can be used, and will trigger a
+		# confirmation-required prompt to the end user at runtime that they are
+		# using an OOF file they require permission from the author to use.  To
+		# bypass this confirmation (for example, on corporate infrastructure),
+		# use OOF_RESTRICTED_CONTENT_ALLOWED=1 in the environment, which will
+		# instead only display a warning about the use of restricted content.
+		license: "CC0-1.0"
+	}
+}
+
+# `target` (optional) dictates which machine is being configured by OOF,
+# defaulting to the system OOF itself is running on. This will be useful for
+# remote deployments, though that functionality is not yet implemented.
+#
+# Default provided here for completeness:
+target: {
+	type: "self"
+}
+
+# `using` (required) is OOF's dependency manager, which should look loosely
+# familiar to those who have used Cargo, NPM, Nix, or other locking package
+# managers.
+#
+# OOF is merely an engine that translates config files into instructions to
+# pass to underlying package managers and utilities, and does not inherently
+# understand anything about particular distributions, their package lists,
+# their design choices, or their quirks. Those details are outsourced to
+# independent OOF files following the `distribution` schemas, documented
+# elsewhere.  `distribution` schemas aren't shipped with OOF's core, you'll
+# need to import them from somewhere; a canonical repository of "blessed"
+# definitions is provided in a (much more rapidly iterating) repository,
+# "oof-configs", but you're free to build your own, or use some from a third
+# party. Thus, `using` with at least one member is effectively required.
+#
+# You may wish to use more than just the upstream `oof-configs`, for example,
+# you may wish to inherit from or reuse someone else's configs (dotfile
+# stealing, anyone?). `using` enables this usecase as well.
+#
+# `using` takes a map (thus, keys are unique) of string->ref, where ref is any
+# of the following schemas:
+#
+# {
+#	git: "string"
+#	# ^ required; any repository reference git understands
+#	# (https://web.archive.org/web/20210801223148/https://stackoverflow.com/questions/31801271/what-are-the-supported-git-url-formats)
+#	# is fine
+#
+#	rev: "string"
+#	# ^ optional; defaults to whatever git determines as the default branch.
+#	# any revision reference git understands is fine; this includes branch names,
+#	# tags, or commit SHAs (as many characters as is necessary to uniquely
+#	# identify a ref)
+#
+#	shallow: boolean
+#	# ^ optional; defaults to true
+#
+#	bin: "string"
+#	# ^ optional; defaults to the first executable named "git" found in PATH
+# }
+#
+# ... more to come, TODO: file/dir refs, other vcs(?), tarballs/zips(?)
+using: {
+	oof_configs: {
+		git: "https://code.klar.sh/oof-configs"
+		rev: "1234567"
+	}
+}
+
+# `extends` (functionally required, but theoretically optional) sets up the
+# inheritance tree for this OOF config: this array is merged deeply from left
+# to right to make a final base for this top-level config to then itself be
+# deeply merged into. Later entries take precedence over earlier ones. "pick"
+# and "omit" provide for partial inheritance where desireable.
+extends: [
+	{
+		repo: "oof_configs"
+		path: "systems/linux/alpine/3.13.5"
+		# ^ required. Must be a path to an OOF config (any supported schema)
+		# under the `oofdefs` directory of the repository
+
+		# pick: ["packages_raw"]
+		# # ^ optional. This would allow selecting just N instructions from a
+		# # base config (perhaps, you want to create all the users created in
+		# # some other config, but not install its packages or fstab). Exclusive
+		# # with "omit"
+		#
+		# omit: ["intentpkgs"]
+		# # ^ optional. This would allow selecting all instructions except N
+		# # from a base config (perhaps, you want to completely copy another
+		# # machine's config, but not its disks). Exclusive with "pick".
+	}
+]
+
+# `disks` (optional) can maintain your fstab, which informs the system of the
+# disks or disk-likes it will have access to. It takes a list of objects in the
+# following format, and by default will ensure the userspace utilities and (if
+# necessary) kernel modules for the filesystem are present on the target
+# system.
+disks: [
+	{
+		source: "/dev/disks/by-label/AlpineRoot"
+		mountpoint: "/"
+		type: "ext4"
+		options: [ # optional, defaults to ["defaults"]
+			"defaults"
+			"relatime"
+		]
+		dump: false # optional, defaults to false
+		fsck_order: 1
+		# ^ optional, defaults to:
+		# - 1 if dir is "/"
+		# - 2 if dir is anything else and type is known to be fsck-able
+		# - 0 in all other cases
+		#
+		# fsck_order must always be within the bounds [0, 2]
+		#
+		install_userspace_utils: true
+		# ^ optional, defaults to true, which will either install the
+		# appropriate userspace utilities (in this case, e2fsprogs) or complain
+		# that the distribution mapping doesn't handle this filesystem. Some
+		# distribution mappings, for example Arch Linux's in oof-configs, will
+		# need to import external repositories or enable the use of
+		# user-provided packages to support a given filesystem; be sure to read
+		# through the system plan when prompted and audit the sources of
+		# installed packages appropriately.
+
+		install_kernel_modules: true
+		# ^ optional, defaults to true, which is a no-op for anything known to
+		# be built into the selected kernel (see the `kernel` instruction)
+	}
+	{
+		source: "tmpfs"
+		mountpoint: "/tmp"
+		type: "tmpfs"
+		options: [
+			"defaults"
+			"nosuid"
+			"nodev"
+		]
+	}
+	{
+		source: "/dev/disks/by-label/AlpineBoot"
+		mountpoint: "/boot"
+		type: "vfat"
+	}
+]
+
+# `linux_kernels` (optional) can ensure kernels of a given series are
+# installed, and optionally their headers. It will refuse to allow the
+# underlying package manager to install kernels outside of the given version
+# range, and will remove (as thoroughly as the distribution mapping understands
+# how to) any already-installed kernels outside of said range.
+#
+# Distribution mappings are expected to provide defaults that resemble the
+# underlying distro's choices: for example, Alpine 3.13 ships with kernels
+# >=5.10.7 and <5.11, and Arch ships with, effectively, no version bounds or
+# guarantees at all.
+linux_kernels: [
+	{
+		series: "default"
+		# ^ optional, can be anything the distribution mapping understands; the
+		# only guarantee is that "default" will install the default kernel
+		# series for that distribution. Some distribution mappings may
+		# understand "lts", "mainline", "zfs", "zen", or others - effort should
+		# be made by distribution mappers to use series labels that are
+		# consistent across distributions wherever possible, but this is not
+		# guaranteed per-se.
+
+		versions: "^5.10.7"
+		# ^ optional, defaults to "*". Follows the versioning spec implemented
+		# by Cargo,
+		# https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html.
+		# The kernel doesn't officially follow semantic versioning, but given
+		# that the example of `^5.10.7` is parsed as `>=5.10.7, <5.11`, it
+		# works similarly for practical purposes within each "major" series.
+
+		install_headers: true # optional, defaults to false
+		install_firmware: true
+		# ^ optional, defaults to true*, will almost always conflict with
+		# disparate install_firmware entries in other kernels since, with
+		# extremely rare exceptions, firmware is generally installed globally
+		# at a single version and shared across all kernels. If your
+		# distribution enables tricks like compiling firmware into the kernel,
+		# your distribution mapper will handle disparate values however it sees
+		# appropriate; see that mapper's documentation.
+		#
+		# * This is technically a lie if you care how the sausage is made. It
+		# defaults to null, which does not collide with true or false, and if
+		# all kernel entries' install_firmware are null, the final result is
+		# truthy.
+	}
+]
+
+# Inherited from OVER's grammar, keys starting with @ are private: unless
+# referenced elsewhere in the configuration, OOF doesn't even have access to
+# these values. This is a great way to reuse values throughout your
+# configuration.
+@extra_user_groups: [
+	"wheel"
+	"storage"
+	"audio"
+	"video"
+]
+
+# `users` (optional) maintains the list of users on the system. Creation order
+# is not guaranteed. Users not found in this mapping **will not be removed**
+# unless:
+#
+# - they were originally created by OOF OR
+# - a stub user was tracked by OOF
+# AND
+# - the user's entry, when known, had "prune_on_removal: true"
+#
+# This implies that fully purging a user with just OOF can be a one- or
+# two-step operation, depending on the system state OOF is inheriting and the
+# state of your system config.
+users: {
+	george: {
+		uid: 1000
+		# ^ optional, defaults to null, letting the system pick the next
+		# available UID
+
+		full_name: "George Jetson" # optional
+		is_system: false # optional, defaults to false
+
+		main_group: "users"
+		# ^ optional, defaults to "users", exclusive with gid. Each group must
+		# be known to OOF to exist by some means (perhaps it's provided by some
+		# package, potentially the core "filesystem" package provided by the
+		# distribution, or perhaps it's added in a `groups` instruction
+		# elsewhere.
+
+		extra_groups: @extra_user_groups
+		# ^ optional, defaults to []. Same constraints apply as with main_group.
+
+		shell: "elvish"
+		# ^ optional, defaults to "sh" which varies by distribution. Must not
+		# be a fully-qualified path if install_missing_shell is true: in other
+		# words, use "bash" instead of "/bin/bash", but if you set the shell to
+		# "/opt/bash", turn off install_missing_shell and provide "/opt/bash"
+		# yourself in some other step. On distributions with alternatives
+		# systems, the default will be whatever the default /bin/sh alternative
+		# is (perhaps dash or busybox sh). The shell must have a known mapping
+		# for the given distribution, and will be automatically installed
+		# unless install_missing_shell is false.
+
+		install_missing_shell: true
+		# ^ optional, defaults to true. When false, one of two behaviors applies:
+		#
+		# - if shell is a fully qualified path (starts with /), expects the
+		#   file to be provided in some other step as a side effect, and will
+		#   error if this constraint is not fulfilled
+		# - otherwise, optimistically assumes the
+		#   shell will be installed by some other means: consider this an
+		#   extremely unsafe break-glass.
+		#
+		# Conflicts with disparate (shell, install_missing_shell) pairs in the
+		# user mappings.
+
+		# Cool, let's talk about passwords, this should be good fun. The
+		# password block schema is a generic schema that can (and probably
+		# will) be reused anywhere secure inputs can be useful, while allowing
+		# unsafe usage if you want it. It consists of a source, and 0+ other
+		# parameters depending on source. Here's the full enumeration of
+		# possible schemas for secure input at time of writing:
+		#
+		# {
+		#	source: "raw"
+		#	value: "ThisIsMyPassword" # required
+		# }
+		#
+		# {
+		#	source: "file-plaintext"
+		#	path: "./PasswordPlaintext.txt"
+		#	# ^ required. Must be a valid path (absolute, or relative to the OOF
+		#   # file) to a file readable by the user executing OOF, on the system
+		#   # executing OOF.
+		# }
+		#
+		# The file-gpg-near source will call to GPG directly, so you'll need
+		# either a gpg-agent session already running, or a working pinentry. It
+		# evaluates the password on the system executing OOF, meaning remote
+		# targets will receive the password over whatever communication method
+		# is used to speak to the target. While remote targets should almost
+		# always be spoken to over encrypted channels like SSH, there is
+		# inherent risk involved here, and you should consider your trust model
+		# before using this.
+		# {
+		#	source: "file-gpg-near"
+		#	path: "./PasswordEncrypted.txt.enc"
+		#	# ^ required, same rules as file-plaintext.path
+		#
+		#	gpg_key: "josh@klar.sh" # required, any key identifier GPG accepts
+		#
+		#	gpg_bin: "/opt/gpg-wrapper.sh"
+		#	# ^ optional, defaults to the first executable named gpg found in
+		#	# PATH on the system executing OOF.
+		# }
+		#
+		# This will simply read from stdin the first time the OOF config is
+		# deployed, and will make future password evaluations a no-op. Thus,
+		# this option does not leak secrets to state, but **does** open the
+		# system up to undetectable drift. See prompt-always for an
+		# alternative.
+		# {
+		#	source: "prompt-once"
+		# }
+		#
+		# This will simply read from stdin each time the OOF config is
+		# deployed. This option does not leak secrets to state, but **does**
+		# require typing in the desired password each time said config deploys,
+		# making it fairly unsuitable for automation.
+		# {
+		#	source: "prompt-always"
+		# }
+		password: {
+			source: "raw"
+		}
+	}
+
+	jane: {
+		gid: 1000
+		# ^ optional, defaults to the gid of "users". exclusive with main_group
+		extra_groups: @extra_user_groups
+		shell: "bash"
+	}
+
+	# For example's sake, here's how to teach OOF about a user that already
+	# exists on a system through some other means. All other options, except
+	# prune_on_removal, are ignored if state_stub is present.
+	zzz: {
+		state_stub: true
+
+		match_by: "name"
+		# ^ optional, defaults to "name". Must be one of "name" or "id".
+
+		not_matched_error_behavior: "ignore"
+		# ^ required. Must be one of "ignore", "warn", "error". "ignore" is
+		# mostly useful for trying to roll out state tracking for disparate
+		# extant systems in a two-step user purge migration path (how's that
+		# for a mouthful of words?). In other words, if machine A has a user
+		# "zzz" which you'd like to delete, and machine B has already, by some
+		# means, deleted this user, and neither machine's zzz user is in the
+		# OOF state for the respective machine, you want the state stub to
+		# exist either way so that prune_on_removal will enable cleaning up the
+		# user on machine B up without manual intervention when this zzz block
+		# is removed in a future migration. Phew, state management in a
+		# declarative world with the possibility of externally-introduced drift
+		# is hellish!
+
+		prune_on_removal: true # optional, defaults to false
+	}
+
+	# It wouldn't be software if there weren't tangly corner cases to deal
+	# with... the root user is one such corner case, where **the defaults are
+	# different**, or perhaps more accurately, immutable. It's only useful to
+	# track the root user in OOF for password-setting purposes.
+	root: {
+		uid: 0
+		# ^ optional, can never be any value that is not 0.
+		gid: 0
+		# ^ optional, can never be any value that is not 0. Implicitly,
+		# main_group is also fixed to "root"
+		extra_groups: []
+		# ^ optional, can never be any value that is not [].
+		prune_on_removal: false
+		# ^ optional, can never be true
+
+		password: {
+			source: "prompt-once"
+		}
+	}
+}
+
+# `groups` (optional) maintains the list of groups on the system. Creation
+# order is not guaranteed. Groups not found in this mapping **will not be
+# removed** unless:
+#
+# - they were originally created by OOF OR
+# - a stub group was tracked by OOF
+# AND
+# - the group's entry, when known, had "prune_on_removal: true"
+#
+# This implies that fully purging a group with just OOF can be a one- or
+# two-step operation, depending on the system state OOF is inheriting and the
+# state of your system config.
+groups: {
+	example: {
+		id: 1005
+		# ^ optional, defaults to null, letting the system pick the next
+		# available GID
+
+		is_system: false # optional, defaults to false
+
+		# supports state_stub, match_by, not_matched_error_behavior, and
+		# prune_on_removal identically to `users`
+	}
+}
+
+# `shells` (optional) ensures various shells are available on the system. The
+# keys in this map need to be handled by your distribution mapper; since not
+# all distributions provide all shells, it's not possible to enumerate the
+# possible entries here, but most distributions will provide "bash", "zsh",
+# "fish", and probably "dash".
+shells: {
+	bash: {
+		install_completion: true # optional, defaults to false
+
+		install_completion_error_behavior: "error"
+		# ^ optional, defaults to "error". Must be one of "warn" or "error".
+		# This determines what to do if the distribution mapper doesn't know
+		# how to install completion for the given shell: perhaps the shell
+		# doesn't have a concept of completion files, perhaps they aren't
+		# packaged for the distribution in question, or perhaps the
+		# distribution mapper doesn't know about the correct package. This can
+		# ease OOF config portability between distributions if set to "warn",
+		# at the cost of guaranteeing the outcome state of the system. The
+		# choice is yours: optimize for correct, or for good-enough.
+
+		system_config_file: "./example.bashrc"
+		# ^ optional. Must be a valid path (absolute, or relative to the OOF
+		# file) to a file readable by the user executing OOF, on the system
+		# executing OOF. It will be copied to the shell's system-wide
+		# configuration path on the target system if the shell supports such a
+		# thing, and will raise an unhandleable error if not. For example, this
+		# might be how you choose to overwrite /etc/bashrc. Use with care.
+	}
+}
+
+# `privesc` (optional) configures privilege escalation paths for non-root
+# users. It will install the provider (if not already present) and configure
+# it, either via the provided abstraction, or by simply copying in a provided
+# config file verbatim (for doas) or piping it into visudo (for sudo).
+#
+# Omitting `privesc` does not guarantee sudo/doas are not installed; it just
+# leaves the state undefined and will use the distribution default. Most Linux
+# distributions ship with sudo, though without a (useful) escalation path
+# configured.
+privesc: {
+	method: "sudo" # optional, defaults to "sudo". Must be one of "sudo" or "doas"
+	config_file: "./example.bashrc"
+	# ^ optional. Must be a valid path (absolute, or relative to the OOF
+	# file) to a file readable by the user executing OOF, on the system
+	# executing OOF. For doas, the config file will be copied verbatim, and for
+	# sudo, it will be piped through visudo. Exclusive with "sudo_config" and
+	# "doas_config".
+
+	# doas_config / sudo_config planned but not implemented
+}
+
+# `intentpkgs` (optional) ensures packages are installed, in a
+# distribution-independent manner. It takes a tuple (*not* an array! use parens
+# instead of brackets) of intents, which take one of two formats:
+#
+# - a string, such as "applications/text/ripgrep"
+# - a block in the following schema:
+#
+# {
+#	intent: "ux/windowmanagers/sway"
+#	opts: {
+#		with_swaybar: true
+#		with_swaylock: true
+#		with_screenshare_support: true
+#	}
+# }
+#
+# Not all intents take opts, and the format of opts is a map of String to any
+# primitive type (null, bool, string, numbers), a list of primitive types, or
+# another layer of map following these same rules, so you'll have to poke at a
+# given intent to see what configuration, if any, it offers. In many cases,
+# opts will pull in peer dependencies or recommended dependencies to enhance
+# the user experience: in the sway example provided, with_screenshare_support
+# will try to pull in the necessary dependencies for pipewire-based
+# screensharing, which is "bonus" behavior. As always, not all distribution
+# mappings will fulfill all possible intents enumerated by OOF. If you find
+# yourself needing to install packages for which intents aren't mapped by your
+# distribution mapper, you have a few options:
+#
+# - If the distribution packages the tool at hand and all that's missing is the
+#   intent mapping, contribute it to the source (perhaps oof-configs) upstream!
+#
+# - If you'd rather not contribute the definition upstream for some reason, you
+#   can write the intent mapping yourself following the `distributionmapping`
+#   schema and `extends` it from this `system` schema.
+#
+# - If both of those fail, report the missing mapping to the upstream configs
+#   source following their issue reporting guidelines, which will likely include
+#   documenting which distribution packages would fulfill the intent. At this
+#   point, you can temporarily install the packages in `rawpkgs`, documented
+#   later. If upstream later maps the package, you'll be notified by OOF that
+#   your `rawpkgs` entries are now redundant, and that you can move to
+#   `intentpkgs`.
+#
+# - If the package doesn't exist for the distribution at all, you'll need to go
+#   through whatever process your distribution uses for adding packages. Good
+#   luck! You may need to use various file creation hacks (documented later, TODO
+#   spec schema for this usecase) to get the binaries installed on your system
+#   (perhaps by extracting tarballs or building from source).
+intentpkgs: (
+	"applications/text/ripgrep"
+	"applications/system/htop"
+
+	"browsers/tui/elinks"
+
+	{
+		intent: "ux/windowmanagers/sway"
+		opts: {
+			with_swaybar: true
+			with_swaylock: true
+			with_screenshare_support: true
+		}
+	}
+)
+
+# `rawpkgs` (optional) ensures packages are installed, in a
+# distribution-specific manner. The package names will be passed verbatim to
+# the underlying package manager. Packages that are part of an intent
+# definition will trigger a warning, encouraging the config to be changed to
+# point at the intentpkg abstraction instead. These warnings can be squelched
+# with OOF_INTENTPKG_UPGRADE_ADVICE_DISABLE=1 in the environment.
+rawpkgs: [
+	"openrc" # already included by alpine but I needed an example :)
+]

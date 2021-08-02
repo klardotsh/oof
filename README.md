@@ -41,17 +41,16 @@ greatly between distributions.
 
 ## Extending or hacking on `oof`
 
-`oof` is, for the most part, implemented in [Gluon](https://gluon-lang.org/),
-hosted by a small [Rust](https://www.rust-lang.org/) application providing the
-Gluon runtime and interfacing with foreign functions and applications as
-necessary (for example, [libalpm](https://man.archlinux.org/man/libalpm.3) on
-systems using `pacman` under the hood, or
-[apk-tools](https://gitlab.alpinelinux.org/alpine/apk-tools) on systems using
-`apk`, such as Alpine). As a general rule of thumb, if it has anything to do
-with "business logic", it should almost certainly live on the Gluon side of the
-world, and not in Rust. Conversely, if it has anything to do with `oof`'s core
-execution flow or exposition of APIs, there's a decent chance it should live on
-the Rust side.
+`oof` is implemented in Rust, and intends to prioritize
+backwards-compatibility, ease of understanding, ease of use, and extensibility
+through external executables where appropriate (in other words: the core engine
+should be kept slim). `oof` config files use the
+[OVER](https://github.com/m-cat/over) format targeting well-defined,
+well-documented, and strictly versioned schemas. Deprecation of a schema should
+be publicized well in advance of its removal to reduce end-user churn to every
+extent possible. In an ideal world, _`oof` configs could work forever_. It is
+our job as developers to limit the headaches we inflict on end-users,
+especially for foundational/infrastructural software.
 
 ### A word about code style
 

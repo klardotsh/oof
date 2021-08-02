@@ -1,0 +1,16 @@
+[package]
+name = "oof"
+version = "0.1.0"
+edition = "2018"
+license = "CC0-1.0"
+categories = [
+	"command-line-utilities",
+	"config",
+]
+
+[dependencies]
+argh = "0.1.5"
+console = "0.14"
+dialoguer = "0.8"
+over = "0.6"
+semver = "1.0"

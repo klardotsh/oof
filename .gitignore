@@ -1,8 +1,8 @@
 .envrc
 .direnv
 
-nimcache/
-nimblecache/
-htmldocs/
-
 oof
+
+# Added by cargo
+
+/target
