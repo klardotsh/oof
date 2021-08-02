@@ -9,6 +9,7 @@ use over::obj::Obj;
 
 const COULD_NOT_BE_PARSED_AS_STRING: &'static str = "could not be parsed as a String";
 const COULD_NOT_BE_PARSED_AS_OBJ: &'static str = "could not be parsed as an Object";
+const COULD_NOT_BE_PARSED_AS_ARR: &'static str = "could not be parsed as a homogenous Array";
 const COULD_NOT_DETERMINE_REPO_TYPE: &'static str = "could not determine repo type (eg. git)";
 const MAINTAINER_OR_HOMEPAGE_REQUIRED: &'static str =
     "meta.maintainer and/or meta.homepage is required";
@@ -28,6 +29,7 @@ pub enum SchemaParsingError {
         schema_type: String,
         requested_version: String,
     },
+    ExtendingNonExistantRepo(String),
 }
 
 #[derive(Debug)]
@@ -273,26 +275,14 @@ pub fn from_over_obj(obj: &Obj) -> Result<OofFile, SchemaParsingError> {
         }
     };
 
-    let oof_schema = match parse_oof_schema_type(&oof_instruction_obj) {
-        Ok(schema) => schema,
-        Err(err) => {
-            return Err(err);
-        }
-    };
-
+    let oof_schema = parse_oof_schema_type(&oof_instruction_obj)?;
     eprintln!(
         "{} parsed schema header: {:?}",
         style("successfully").green(),
         oof_schema
     );
 
-    let oof_meta = match parse_oof_meta(&oof_instruction_obj) {
-        Ok(meta) => meta,
-        Err(err) => {
-            return Err(err);
-        }
-    };
-
+    let oof_meta = parse_oof_meta(&oof_instruction_obj)?;
     eprintln!(
         "{} parsed meta header: {:?}",
         style("successfully").green(),
@@ -304,24 +294,24 @@ pub fn from_over_obj(obj: &Obj) -> Result<OofFile, SchemaParsingError> {
     let target = Target {
         target_type: TargetType::TargetSelf,
     };
-
     eprintln!(
         "{} hard-coded target block (lol): {:?}",
         style("successfully").green(),
         target
     );
 
-    let using = match parse_using(&obj) {
-        Ok(using) => using,
-        Err(err) => {
-            return Err(err);
-        }
-    };
-
+    let using = parse_using(&obj)?;
     eprintln!(
         "{} parsed using: {:?}",
         style("successfully").green(),
         using
+    );
+
+    let extends = parse_extends(&obj, &using)?;
+    eprintln!(
+        "{} parsed extends: {:?}",
+        style("successfully").green(),
+        extends
     );
 
     Err(SchemaParsingError::Generic("rest not implemented"))
@@ -421,7 +411,7 @@ fn parse_oof_meta_maintainer(meta: &Obj) -> Result<OofFileMetaMaintainer, Schema
 fn parse_using(config: &Obj) -> Result<UsingMap, SchemaParsingError> {
     match config.get_obj(&"using") {
         Ok(using) => {
-            let mut result: UsingMap = HashMap::new();
+            let mut result: UsingMap = HashMap::with_capacity(using.len());
 
             for (repo, config) in using.iter() {
                 if let Ok(config_obj) = config.get_obj() {
@@ -453,6 +443,74 @@ fn parse_using(config: &Obj) -> Result<UsingMap, SchemaParsingError> {
         Err(_) => Err(SchemaParsingError::MalformedOofInstruction {
             field_name: "using".to_string(),
             problem: COULD_NOT_BE_PARSED_AS_OBJ,
+        }),
+    }
+}
+
+fn parse_extends<'using>(
+    config: &Obj,
+    using: &'using UsingMap,
+) -> Result<Vec<Extends<'using>>, SchemaParsingError> {
+    match config.get_arr(&"extends") {
+        Ok(extends) => {
+            let mut result = Vec::with_capacity(extends.len());
+
+            for e in extends.iter() {
+                let eobj = match e.get_obj() {
+                    Ok(obj) => obj,
+                    Err(_) => {
+                        return Err(SchemaParsingError::MalformedOofInstruction {
+                            field_name: "extends[i]".to_string(),
+                            problem: COULD_NOT_BE_PARSED_AS_OBJ,
+                        });
+                    }
+                };
+
+                let repo = match eobj.get_str(&"repo") {
+                    Ok(val) => val,
+                    Err(_) => {
+                        return Err(SchemaParsingError::MalformedOofInstruction {
+                            field_name: "extends[i].repo".to_string(),
+                            problem: COULD_NOT_BE_PARSED_AS_STRING,
+                        });
+                    }
+                };
+
+                if !using.contains_key(&repo) {
+                    return Err(SchemaParsingError::ExtendingNonExistantRepo(repo.clone()));
+                }
+
+                let path = match eobj.get_str(&"path") {
+                    Ok(path) => path,
+                    Err(_) => {
+                        return Err(SchemaParsingError::MalformedOofInstruction {
+                            field_name: "extends[i].path".to_string(),
+                            problem: COULD_NOT_BE_PARSED_AS_STRING,
+                        });
+                    }
+                };
+
+                result.push(Extends {
+                    repo: using.get(&repo).unwrap(),
+                    path: path.clone(),
+                    pick: eobj
+                        .get_arr(&"pick")
+                        .and_then(|picks| Ok(picks.vec_ref().to_vec()))
+                        .and_then(|objs| objs.iter().map(|obj| obj.get_str()).collect())
+                        .ok(),
+                    omit: eobj
+                        .get_arr(&"omit")
+                        .and_then(|omits| Ok(omits.vec_ref().to_vec()))
+                        .and_then(|objs| objs.iter().map(|obj| obj.get_str()).collect())
+                        .ok(),
+                });
+            }
+
+            Ok(result)
+        }
+        Err(_) => Err(SchemaParsingError::MalformedOofInstruction {
+            field_name: "extends".to_string(),
+            problem: COULD_NOT_BE_PARSED_AS_ARR,
         }),
     }
 }
