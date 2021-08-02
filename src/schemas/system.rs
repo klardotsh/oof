@@ -4,7 +4,30 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use console::style;
+use over::obj::Obj;
+
+const COULD_NOT_BE_PARSED_AS_STRING: &'static str = "could not be parsed as a String";
+const COULD_NOT_BE_PARSED_AS_OBJ: &'static str = "could not be parsed as an Object";
+const MAINTAINER_OR_HOMEPAGE_REQUIRED: &'static str =
+    "meta.maintainer and/or meta.homepage is required";
+
 // TODO everything in this chunk needs to find a reusable home
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum SchemaParsingError {
+    Generic(&'static str),
+    MissingOofInstruction,
+    MalformedOofInstruction {
+        field_name: String,
+        problem: &'static str,
+    },
+    UnsupportedSchemaType(String),
+    UnsupportedSchemaVersion {
+        schema_type: String,
+        requested_version: String,
+    },
+}
 
 #[derive(Debug)]
 pub enum ErrorBehavior {
@@ -30,6 +53,36 @@ pub enum SecurableInput {
     },
     PromptOnce,
     PromptAlways,
+}
+
+#[derive(Debug)]
+pub struct OofFile {
+    schema: OofFileSchema,
+    meta: OofFileMeta,
+}
+
+#[derive(Debug)]
+pub enum OofFileSchema {
+    System20210801,
+}
+
+#[derive(Debug)]
+pub struct OofFileMeta {
+    maintainer: Option<OofFileMetaMaintainer>,
+    homepage: Option<String>,
+    license: OofFileLicense,
+}
+
+#[derive(Debug)]
+pub struct OofFileMetaMaintainer {
+    name: String,
+    contact: Option<String>,
+}
+
+#[derive(Debug)]
+pub enum OofFileLicense {
+    Restricted,
+    SPDXIdentifier(String),
 }
 
 // below here should all be schema-specific
@@ -200,4 +253,132 @@ pub enum IntentPkgOpt {
     String(String),
     List(Box<IntentPkgOpt>),
     Map(HashMap<String, Box<IntentPkgOpt>>),
+}
+
+pub fn from_over_obj(obj: &Obj) -> Result<OofFile, SchemaParsingError> {
+    let oof_instruction_obj = match obj.get_obj(&"oof") {
+        Ok(oof) => oof,
+        Err(_) => {
+            return Err(SchemaParsingError::MissingOofInstruction);
+        }
+    };
+
+    let oof_schema = match parse_oof_schema_type(&oof_instruction_obj) {
+        Ok(schema) => schema,
+        Err(err) => {
+            return Err(err);
+        }
+    };
+
+    eprintln!(
+        "{} parsed schema header: {:?}",
+        style("successfully").green(),
+        oof_schema
+    );
+
+    let oof_meta = match parse_oof_meta(&oof_instruction_obj) {
+        Ok(meta) => meta,
+        Err(err) => {
+            return Err(err);
+        }
+    };
+
+    eprintln!(
+        "{} parsed meta header: {:?}",
+        style("successfully").green(),
+        oof_meta
+    );
+
+    Err(SchemaParsingError::Generic("rest not implemented"))
+}
+
+fn parse_oof_schema_type(oof: &Obj) -> Result<OofFileSchema, SchemaParsingError> {
+    match oof.get_obj(&"schema") {
+        Ok(schema) => match schema.get_str(&"type") {
+            Ok(schema_type) => match schema_type.as_str() {
+                "system" => match schema.get_str(&"version") {
+                    Ok(version) => match version.as_str() {
+                        "2021.08.01" => Ok(OofFileSchema::System20210801),
+                        _ => Err(SchemaParsingError::UnsupportedSchemaVersion {
+                            schema_type: schema_type,
+                            requested_version: version,
+                        }),
+                    },
+                    Err(_) => Err(SchemaParsingError::MalformedOofInstruction {
+                        field_name: "schema.version".to_string(),
+                        problem: COULD_NOT_BE_PARSED_AS_STRING,
+                    }),
+                },
+                _ => Err(SchemaParsingError::UnsupportedSchemaType(schema_type)),
+            },
+            Err(_) => Err(SchemaParsingError::MalformedOofInstruction {
+                field_name: "schema.type".to_string(),
+                problem: COULD_NOT_BE_PARSED_AS_STRING,
+            }),
+        },
+        Err(_) => Err(SchemaParsingError::MalformedOofInstruction {
+            field_name: "schema".to_string(),
+            problem: COULD_NOT_BE_PARSED_AS_OBJ,
+        }),
+    }
+}
+
+fn parse_oof_meta(oof: &Obj) -> Result<OofFileMeta, SchemaParsingError> {
+    match oof.get_obj(&"meta") {
+        Ok(meta) => {
+            let maintainer = parse_oof_meta_maintainer(&meta);
+            let homepage = meta.get_str(&"homepage");
+
+            if !maintainer.is_ok() && !homepage.is_ok() {
+                return Err(SchemaParsingError::MalformedOofInstruction {
+                    field_name: "meta.maintainer".to_string(),
+                    problem: MAINTAINER_OR_HOMEPAGE_REQUIRED,
+                });
+            }
+
+            if let Ok(license) = meta.get_str(&"license") {
+                let lowercased_license = license.to_lowercase();
+
+                return Ok(OofFileMeta {
+                    maintainer: maintainer.ok(),
+                    homepage: homepage.ok(),
+                    license: match lowercased_license.as_str() {
+                        "restricted" | "proprietary" => OofFileLicense::Restricted,
+                        _ => OofFileLicense::SPDXIdentifier(license),
+                    },
+                });
+            } else {
+                return Err(SchemaParsingError::MalformedOofInstruction {
+                    field_name: "meta.license".to_string(),
+                    problem: COULD_NOT_BE_PARSED_AS_STRING,
+                });
+            }
+        }
+        Err(_) => Err(SchemaParsingError::MalformedOofInstruction {
+            field_name: "meta".to_string(),
+            problem: COULD_NOT_BE_PARSED_AS_STRING,
+        }),
+    }
+}
+
+fn parse_oof_meta_maintainer(meta: &Obj) -> Result<OofFileMetaMaintainer, SchemaParsingError> {
+    match meta.get_obj(&"maintainer") {
+        Ok(maintainer) => match maintainer.get_str(&"name") {
+            Ok(maintainer_name) => Ok(OofFileMetaMaintainer {
+                name: maintainer_name,
+                contact: match maintainer.get_str(&"contact") {
+                    Ok(contact) => Some(contact),
+                    Err(_) => None,
+                },
+            }),
+            Err(_) => Err(SchemaParsingError::MalformedOofInstruction {
+                field_name: "meta.maintainer.name".to_string(),
+                problem: COULD_NOT_BE_PARSED_AS_STRING,
+            }),
+        },
+        Err(_) => Err(SchemaParsingError::MalformedOofInstruction {
+            field_name: "meta.maintainer".to_string(),
+            problem: COULD_NOT_BE_PARSED_AS_OBJ,
+        }),
+    }
 }
