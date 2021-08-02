@@ -9,6 +9,7 @@ use over::obj::Obj;
 
 const COULD_NOT_BE_PARSED_AS_STRING: &'static str = "could not be parsed as a String";
 const COULD_NOT_BE_PARSED_AS_OBJ: &'static str = "could not be parsed as an Object";
+const COULD_NOT_DETERMINE_REPO_TYPE: &'static str = "could not determine repo type (eg. git)";
 const MAINTAINER_OR_HOMEPAGE_REQUIRED: &'static str =
     "meta.maintainer and/or meta.homepage is required";
 
@@ -56,6 +57,12 @@ pub enum SecurableInput {
 }
 
 #[derive(Debug)]
+pub enum Executable {
+    Discoverable(&'static str),
+    UserProvided(String),
+}
+
+#[derive(Debug)]
 pub struct OofFile {
     schema: OofFileSchema,
     meta: OofFileMeta,
@@ -90,7 +97,7 @@ pub enum OofFileLicense {
 #[derive(Debug)]
 pub struct SystemSchema20210801<'config> {
     target: Target,
-    using: HashMap<String, Using>,
+    using: UsingMap,
     extends: Option<Vec<Extends<'config>>>,
     disks: Option<Vec<Disk>>,
     linux_kernels: Option<Vec<LinuxKernel>>,
@@ -112,12 +119,15 @@ pub enum TargetType {
     TargetSelf,
 }
 
+type UsingMap = HashMap<String, Using>;
+
 #[derive(Debug)]
 pub enum Using {
     Git {
+        upstream: String,
         rev: Option<String>,
         shallow: bool,
-        bin: String,
+        bin: Executable,
     },
 }
 
@@ -289,6 +299,31 @@ pub fn from_over_obj(obj: &Obj) -> Result<OofFile, SchemaParsingError> {
         oof_meta
     );
 
+    // TODO eventually, actually parse what the user asked for here. For now, since there is
+    // exactly one supported value, let's just hard-code and move on.
+    let target = Target {
+        target_type: TargetType::TargetSelf,
+    };
+
+    eprintln!(
+        "{} hard-coded target block (lol): {:?}",
+        style("successfully").green(),
+        target
+    );
+
+    let using = match parse_using(&obj) {
+        Ok(using) => using,
+        Err(err) => {
+            return Err(err);
+        }
+    };
+
+    eprintln!(
+        "{} parsed using: {:?}",
+        style("successfully").green(),
+        using
+    );
+
     Err(SchemaParsingError::Generic("rest not implemented"))
 }
 
@@ -305,19 +340,19 @@ fn parse_oof_schema_type(oof: &Obj) -> Result<OofFileSchema, SchemaParsingError>
                         }),
                     },
                     Err(_) => Err(SchemaParsingError::MalformedOofInstruction {
-                        field_name: "schema.version".to_string(),
+                        field_name: "oof.schema.version".to_string(),
                         problem: COULD_NOT_BE_PARSED_AS_STRING,
                     }),
                 },
                 _ => Err(SchemaParsingError::UnsupportedSchemaType(schema_type)),
             },
             Err(_) => Err(SchemaParsingError::MalformedOofInstruction {
-                field_name: "schema.type".to_string(),
+                field_name: "oof.schema.type".to_string(),
                 problem: COULD_NOT_BE_PARSED_AS_STRING,
             }),
         },
         Err(_) => Err(SchemaParsingError::MalformedOofInstruction {
-            field_name: "schema".to_string(),
+            field_name: "oof.schema".to_string(),
             problem: COULD_NOT_BE_PARSED_AS_OBJ,
         }),
     }
@@ -331,7 +366,7 @@ fn parse_oof_meta(oof: &Obj) -> Result<OofFileMeta, SchemaParsingError> {
 
             if !maintainer.is_ok() && !homepage.is_ok() {
                 return Err(SchemaParsingError::MalformedOofInstruction {
-                    field_name: "meta.maintainer".to_string(),
+                    field_name: "oof.meta.maintainer".to_string(),
                     problem: MAINTAINER_OR_HOMEPAGE_REQUIRED,
                 });
             }
@@ -349,13 +384,13 @@ fn parse_oof_meta(oof: &Obj) -> Result<OofFileMeta, SchemaParsingError> {
                 });
             } else {
                 return Err(SchemaParsingError::MalformedOofInstruction {
-                    field_name: "meta.license".to_string(),
+                    field_name: "oof.meta.license".to_string(),
                     problem: COULD_NOT_BE_PARSED_AS_STRING,
                 });
             }
         }
         Err(_) => Err(SchemaParsingError::MalformedOofInstruction {
-            field_name: "meta".to_string(),
+            field_name: "oof.meta".to_string(),
             problem: COULD_NOT_BE_PARSED_AS_STRING,
         }),
     }
@@ -378,6 +413,45 @@ fn parse_oof_meta_maintainer(meta: &Obj) -> Result<OofFileMetaMaintainer, Schema
         },
         Err(_) => Err(SchemaParsingError::MalformedOofInstruction {
             field_name: "meta.maintainer".to_string(),
+            problem: COULD_NOT_BE_PARSED_AS_OBJ,
+        }),
+    }
+}
+
+fn parse_using(config: &Obj) -> Result<UsingMap, SchemaParsingError> {
+    match config.get_obj(&"using") {
+        Ok(using) => {
+            let mut result: UsingMap = HashMap::new();
+
+            for (repo, config) in using.iter() {
+                if let Ok(config_obj) = config.get_obj() {
+                    if let Ok(git) = config_obj.get_str(&"git") {
+                        result.insert(
+                            repo.clone(),
+                            Using::Git {
+                                upstream: git,
+                                rev: config_obj.get_str(&"rev").ok(),
+                                shallow: config_obj.get_bool(&"shallow").unwrap_or(false),
+                                bin: match config_obj.get_str(&"bin") {
+                                    Ok(bin) => Executable::UserProvided(bin),
+                                    Err(_) => Executable::Discoverable("git"),
+                                },
+                            },
+                        );
+                        continue;
+                    }
+                }
+
+                return Err(SchemaParsingError::MalformedOofInstruction {
+                    field_name: format!("using.{}", repo),
+                    problem: COULD_NOT_DETERMINE_REPO_TYPE,
+                });
+            }
+
+            Ok(result)
+        }
+        Err(_) => Err(SchemaParsingError::MalformedOofInstruction {
+            field_name: "using".to_string(),
             problem: COULD_NOT_BE_PARSED_AS_OBJ,
         }),
     }
